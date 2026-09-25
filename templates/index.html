@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Task Manager</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <style>
+    body { background-color: #f8f9fa; }
+    .app-shell { max-width: 800px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+    .navbar-brand { font-weight: 600; }
+    .task-title.completed { text-decoration: line-through; color: #6c757d; }
+    .list-group-item { display: flex; align-items: center; gap: 0.75rem; }
+    .task-title { flex: 1; word-break: break-word; }
+    #status-banner { display: none; }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar navbar-light bg-white border-bottom">
+    <div class="app-shell d-flex justify-content-between align-items-center w-100 py-0">
+      <span class="navbar-brand mb-0">Task Manager</span>
+      <a class="link-secondary" href="https://github.com/mayankranjan-dev/p1-task-manager" target="_blank" rel="noopener noreferrer">GitHub repo</a>
+    </div>
+  </nav>
+
+  <div class="app-shell">
+
+    <div id="status-banner" class="alert alert-warning py-2 px-3 mt-3 mb-0" role="alert"></div>
+
+    <!-- Auth card: task routes require a bearer token, so grab one first -->
+    <div class="card mt-4">
+      <div class="card-header bg-white">Sign in or register</div>
+      <div class="card-body">
+        <form id="login-form" class="row g-2 align-items-center">
+          <div class="col-sm-4">
+            <input type="text" id="login-username" class="form-control" placeholder="Username" required>
+          </div>
+          <div class="col-sm-4">
+            <input type="password" id="login-password" class="form-control" placeholder="Password" required>
+          </div>
+          <div class="col-sm-4 d-flex gap-2">
+            <button type="submit" class="btn btn-outline-secondary flex-fill">Log In</button>
+            <button type="button" id="register-btn" class="btn btn-outline-primary flex-fill">Register</button>
+          </div>
+        </form>
+        <div id="auth-status" class="small text-muted mt-2"></div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header bg-white">Add a task</div>
+      <div class="card-body">
+        <form id="task-form" class="d-flex gap-2">
+          <input type="text" id="task-title" class="form-control" placeholder="Task title" required>
+          <button type="submit" class="btn btn-primary">Add Task</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header bg-white">Tasks</div>
+      <ul id="task-list" class="list-group list-group-flush">
+        <li class="list-group-item text-muted">Log in to load tasks.</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <script>
+    const API_BASE = '';
+    let authToken = null;
+
+    const statusBanner = document.getElementById('status-banner');
+    const taskList = document.getElementById('task-list');
+    const loginForm = document.getElementById('login-form');
+    const registerBtn = document.getElementById('register-btn');
+    const authStatus = document.getElementById('auth-status');
+    const taskForm = document.getElementById('task-form');
+
+    async function logIn(username, password) {
+      const body = new URLSearchParams({ username, password });
+      const res = await fetch('/auth/login', { method: 'POST', body });
+      if (!res.ok) throw new Error('Invalid username or password');
+      const data = await res.json();
+      authToken = data.access_token;
+      authStatus.textContent = `Signed in as ${username}`;
+      clearError();
+      await loadTasks();
+    }
+
+    function showError(message) {
+      statusBanner.textContent = message;
+      statusBanner.style.display = 'block';
+    }
+
+    function clearError() {
+      statusBanner.style.display = 'none';
+    }
+
+    function authHeaders() {
+      return authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+    }
+
+    async function apiRequest(path, options = {}) {
+      const res = await fetch(API_BASE + path, {
+        ...options,
+        headers: { ...(options.headers || {}), ...authHeaders() },
+      });
+      if (res.status === 401) {
+        authToken = null;
+        showError('Session expired or invalid. Please log in again.');
+        throw new Error('unauthorized');
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Request failed (${res.status})`);
+      }
+      return res.status === 204 ? null : res.json();
+    }
+
+    async function loadTasks() {
+      if (!authToken) return;
+      try {
+        const tasks = await apiRequest('/tasks');
+        renderTasks(tasks);
+        clearError();
+      } catch (err) {
+        showError('Could not load tasks: ' + err.message);
+      }
+    }
+
+    function renderTasks(tasks) {
+      taskList.innerHTML = '';
+      if (tasks.length === 0) {
+        taskList.innerHTML = '<li class="list-group-item text-muted">No tasks yet.</li>';
+        return;
+      }
+      for (const task of tasks) {
+        const item = document.createElement('li');
+        item.className = 'list-group-item';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'form-check-input mt-0';
+        checkbox.checked = task.completed;
+        checkbox.addEventListener('change', () => toggleTask(task, checkbox.checked));
+
+        const title = document.createElement('span');
+        title.className = 'task-title' + (task.completed ? ' completed' : '');
+        title.textContent = task.title;
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-sm btn-outline-danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteTask(task.id));
+
+        item.append(checkbox, title, deleteBtn);
+        taskList.appendChild(item);
+      }
+    }
+
+    async function toggleTask(task, completed) {
+      try {
+        await apiRequest(`/tasks/${task.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: task.title,
+            description: task.description,
+            due_date: task.due_date,
+            completed: completed,
+          }),
+        });
+        await loadTasks();
+      } catch (err) {
+        showError('Could not update task: ' + err.message);
+      }
+    }
+
+    async function deleteTask(taskId) {
+      try {
+        await apiRequest(`/tasks/${taskId}`, { method: 'DELETE' });
+        await loadTasks();
+      } catch (err) {
+        showError('Could not delete task: ' + err.message);
+      }
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+      authStatus.textContent = 'Signing in...';
+      try {
+        await logIn(username, password);
+      } catch (err) {
+        authStatus.textContent = '';
+        showError('Login failed: ' + err.message);
+      }
+    });
+
+    registerBtn.addEventListener('click', async () => {
+      const username = document.getElementById('login-username').value;
+      const password = document.getElementById('login-password').value;
+      if (!username || !password) {
+        showError('Enter a username and password before registering.');
+        return;
+      }
+      authStatus.textContent = 'Creating account...';
+      try {
+        const res = await fetch('/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Request failed (${res.status})`);
+        }
+        clearError();
+        authStatus.textContent = 'Account created! Signing you in...';
+        await logIn(username, password);
+        authStatus.textContent = `Account created! Signed in as ${username}`;
+      } catch (err) {
+        authStatus.textContent = '';
+        showError('Registration failed: ' + err.message);
+      }
+    });
+
+    taskForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!authToken) {
+        showError('Log in before adding tasks.');
+        return;
+      }
+      const titleInput = document.getElementById('task-title');
+      const title = titleInput.value.trim();
+      if (!title) return;
+      try {
+        await apiRequest('/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: title }),
+        });
+        titleInput.value = '';
+        await loadTasks();
+      } catch (err) {
+        showError('Could not add task: ' + err.message);
+      }
+    });
+  </script>
+
+</body>
+</html>
